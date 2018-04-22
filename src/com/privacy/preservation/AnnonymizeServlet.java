@@ -2,104 +2,75 @@ package com.privacy.preservation;
 import javax.servlet.annotation.WebServlet;
 import javax.servlet.*;
 import javax.servlet.http.*;
-import java.io.File;
+import java.io.*;
 import java.io.IOException;
 import java.io.PrintWriter;
-import java.util.List;
-
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.Statement;
+import java.util.*;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-
-import org.apache.commons.fileupload.FileItem;
-import org.apache.commons.fileupload.disk.DiskFileItemFactory;
-import org.apache.commons.fileupload.servlet.ServletFileUpload;
-
+import org.apache.poi.ss.usermodel.*;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.apache.poi.xssf.usermodel.*;
 @WebServlet(name = "AnnonymizeServlet",urlPatterns = {"/annonymizeservlet"})
 public class AnnonymizeServlet extends HttpServlet {
-    private static final long serialVersionUID = 1L;
-
-    // location to store file uploaded
-    private static final String UPLOAD_DIRECTORY = "C:\\Users\\shivam";
-
-    // upload settings
-    private static final int MEMORY_THRESHOLD   = 1024 * 1024 * 3;  // 3MB
-    private static final int MAX_FILE_SIZE      = 1024 * 1024 * 40; // 40MB
-    private static final int MAX_REQUEST_SIZE   = 1024 * 1024 * 50; // 50MB
-
-    /**
-     * Upon receiving file upload submission, parses the request to read
-     * upload data and saves the file on disk.
-     */
-
     protected void doGet(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
 
     }
-    protected void doPost(HttpServletRequest request,HttpServletResponse response) throws ServletException, IOException {
-            // checks if the request actually contains upload file
-            if (!ServletFileUpload.isMultipartContent(request)) {
-                // if not, we stop here
-                PrintWriter writer = response.getWriter();
-                writer.println("Error: Form must has enctype=multipart/form-data.");
-                writer.flush();
-                return;
-            }
-
-            // configures upload settings
-            DiskFileItemFactory factory = new DiskFileItemFactory();
-            // sets memory threshold - beyond which files are stored in disk
-            factory.setSizeThreshold(MEMORY_THRESHOLD);
-            // sets temporary location to store files
-            factory.setRepository(new File(System.getProperty("java.io.tmpdir")));
-
-            ServletFileUpload upload = new ServletFileUpload(factory);
-
-            // sets maximum size of upload file
-            upload.setFileSizeMax(MAX_FILE_SIZE);
-
-            // sets maximum size of request (include file + form data)
-            upload.setSizeMax(MAX_REQUEST_SIZE);
-
-            // constructs the directory path to store upload file
-            // this path is relative to application's directory
-            String uploadPath = getServletContext().getRealPath("")
-                    + File.separator + UPLOAD_DIRECTORY;
-
-            // creates the directory if it does not exist
-            File uploadDir = new File(uploadPath);
-            if (!uploadDir.exists()) {
-                uploadDir.mkdir();
-            }
-
+    protected void doPost(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
+            HttpSession session = request.getSession(false);
+            String admin_username =(String) session.getAttribute("USERNAME");
+            session.setAttribute("USERNAME", admin_username);
+            String upload_message= (String) session.getAttribute("upload_message");
+            session.setAttribute("upload_message",upload_message);
+            String fileName=request.getParameter("myField_fileName");
+            session.setAttribute("fileName",fileName);
+            String FILE_NAME = "C:\\Users\\shivam\\IdeaProjects\\PrivacyPreservation\\web\\templates\\"+fileName+".xlsx";
             try {
-                // parses the request's content to extract file data
-                @SuppressWarnings("unchecked")
-                List<FileItem> formItems = upload.parseRequest(request);
-
-                if (formItems != null && formItems.size() > 0) {
-                    // iterates over form's fields
-                    for (FileItem item : formItems) {
-                        // processes only fields that are not form fields
-                        if (!item.isFormField()) {
-                            String fileName = new File(item.getName()).getName();
-                            String filePath = uploadPath + File.separator + fileName;
-                            File storeFile = new File(filePath);
-
-                            // saves the file on disk
-                            item.write(storeFile);
-                            request.setAttribute("message",
-                                    "Upload has been done successfully!");
+                Class.forName("com.mysql.jdbc.Driver");
+                Connection con1 = DriverManager.getConnection("jdbc:mysql://localhost:3306/"+fileName, "root", "complicated");
+                Statement stmt = con1.createStatement(ResultSet.TYPE_SCROLL_INSENSITIVE,ResultSet.CONCUR_UPDATABLE);
+                ResultSet rs_tablename = stmt.executeQuery("SELECT table_name from information_schema.tables where table_schema='"+fileName+"'");
+                Set<String> blocked_col=new HashSet<String>();
+                while(rs_tablename.next()){
+                    blocked_col.add(rs_tablename.getString(1)+"_name");
+                }
+                if(fileName.equals("transactional_data"))
+                    blocked_col.add("patient_name");
+                FileInputStream excelFile = new FileInputStream(new File(FILE_NAME));
+                Workbook workbook = new XSSFWorkbook(excelFile);
+                Sheet datatypeSheet = workbook.getSheetAt(0);
+                Iterator<Row> iterator = datatypeSheet.iterator();
+                ArrayList<Object> column_values=new ArrayList<Object>();
+                while (iterator.hasNext()) {
+                    Row currentRow = iterator.next();
+                    Iterator<Cell> cellIterator = currentRow.iterator();
+                    while (cellIterator.hasNext()) {
+                        Cell currentCell = cellIterator.next();
+                        //getCellTypeEnum shown as deprecated for version 3.15
+                        //getCellTypeEnum ill be renamed to getCellType starting from version 4.0
+                        if (currentCell.getCellTypeEnum() == CellType.STRING) {
+                            if(!blocked_col.contains(currentCell.getStringCellValue()))
+                                column_values.add(currentCell.getStringCellValue());
+                        } else if (currentCell.getCellTypeEnum() == CellType.NUMERIC) {
+                            if(!blocked_col.contains(currentCell.getNumericCellValue()))
+                                column_values.add(currentCell.getNumericCellValue());
                         }
                     }
                 }
-            } catch (Exception ex) {
-                request.setAttribute("message",
-                        "There was an error: " + ex.getMessage());
+                request.setAttribute("column_arrayList",column_values);
+                request.setAttribute("fileName",fileName);
+                RequestDispatcher disp = null;
+                disp = this.getServletContext().getRequestDispatcher("/AnnonymizeColumns.jsp");
+                disp.forward(request, response);
+            }catch (Exception e) {
+                e.printStackTrace();
             }
-            // redirects client to message page
-            getServletContext().getRequestDispatcher("/message.jsp").forward(
-                    request, response);
         }
     }
 
